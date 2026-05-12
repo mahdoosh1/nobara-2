@@ -1,0 +1,90 @@
+name: generate-sha256-checksums
+
+on:
+  workflow_dispatch:
+    inputs:
+      overwrite:
+        description: 'بازنویسی فایل sha256 (در غیر این صورت append)'
+        required: true
+        type: boolean
+        default: false
+
+jobs:
+  generate-checksums:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 📂 دریافت کد مخزن
+        uses: actions/checkout@v4
+
+      - name: 🔍 بررسی وجود پوشه downloads
+        id: check
+        run: |
+          if [ -d "downloads" ] && [ -n "$(ls -A downloads 2>/dev/null)" ]; then
+            echo "✅ پوشه downloads وجود دارد و خالی نیست"
+            echo "FILES_EXIST=yes" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ پوشه downloads خالی است یا وجود ندارد"
+            echo "FILES_EXIST=no" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 📝 تولید و اضافه کردن چک‌سام‌ها
+        if: steps.check.outputs.FILES_EXIST == 'yes'
+        run: |
+          # اگر overwrite=true باشد، فایل sha256 را خالی می‌کنیم
+          if [ "${{ github.event.inputs.overwrite }}" = "true" ]; then
+            echo "🔄 بازنویسی فایل sha256..."
+            > sha256
+          else
+            echo "➕ اضافه کردن به فایل sha256 موجود..."
+          fi
+          
+          # اضافه کردن تاریخ و زمان به عنوان جداکننده
+          echo "" >> sha256
+          echo "## $(date '+%Y-%m-%d %H:%M:%S') - اجرای جدید" >> sha256
+          echo "" >> sha256
+          
+          # محاسبه sha256 برای همه فایل‌های پوشه downloads
+          cd downloads
+          for file in *; do
+            if [ -f "$file" ]; then
+              echo "🔐 محاسبه sha256 برای: $file"
+              sha256sum -b "$file" >> ../sha256
+            fi
+          done
+          cd ..
+          
+          echo "✅ چک‌سام‌ها با موفقیت ذخیره شدند"
+
+      - name: 📤 ذخیره تغییرات در مخزن
+        if: steps.check.outputs.FILES_EXIST == 'yes'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "action@github.com"
+          
+          # فقط اگر تغییری در فایل sha256 ایجاد شده باشد، commit می‌کنیم
+          if git diff --quiet sha256; then
+            echo "ℹ️ تغییری در فایل sha256 وجود ندارد"
+          else
+            git add sha256
+            git commit -m "📝 بروزرسانی چک‌سام‌های SHA256 - $(date '+%Y-%m-%d %H:%M:%S')"
+            git push origin main
+            echo "✅ تغییرات در مخزن ذخیره شد"
+          fi
+
+      - name: ℹ️ نمایش اطلاعات
+        if: steps.check.outputs.FILES_EXIST == 'yes'
+        run: |
+          echo "========================================="
+          echo "📊 خلاصه چک‌سام‌های ذخیره شده:"
+          echo "========================================="
+          cat sha256
+          echo "========================================="
+          
+      - name: ⚠️ خطا - پوشه downloads خالی است
+        if: steps.check.outputs.FILES_EXIST == 'no'
+        run: |
+          echo "❌ خطا: پوشه downloads وجود ندارد یا خالی است!"
+          echo "💡 ابتدا فایل‌ها را دانلود کنید سپس این workflow را اجرا نمایید"
+          exit 1
