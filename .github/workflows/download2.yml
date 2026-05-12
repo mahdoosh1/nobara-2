@@ -1,0 +1,56 @@
+name: download-nobara-part-2
+
+on:
+  workflow_dispatch:
+    inputs:
+      file_url:
+        description: '🔗 لینک فایل'
+        required: true
+        type: string
+        default: 'https://nobara-images.nobaraproject.org/Nobara-43-Official-2026-04-19.iso'
+
+jobs:
+  conditional-save:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 📂 دریافت کد مخزن
+        uses: actions/checkout@v4
+
+      - name: ⬇️ دانلود فایل
+        run: |
+          mkdir -p downloads
+          curl -L -o "downloads/original_file" "${{ github.event.inputs.file_url }}"
+
+      - name: 📏 بررسی حجم و تصمیم‌گیری
+        id: check
+        run: |
+          SIZE=$(stat -c%s "downloads/original_file")
+          SIZE_MB=$((SIZE / 1024 / 1024))
+          echo "📊 حجم فایل: ${SIZE_MB} MB"
+          if [ $SIZE_MB -lt 90 ]; then
+            echo "✅ فایل زیر ۹۰ مگ است، تقسیم نمی‌شود."
+            mv "downloads/original_file" "downloads/$(basename "${{ github.event.inputs.file_url }}")"
+            echo "SPLIT=no" >> $GITHUB_OUTPUT
+          else
+            echo "✂️ فایل بالای ۹۰ مگ است، تقسیم می‌شود."
+            cd downloads
+            split -d -n 2 original_file half_
+            rm original_file
+            rm half_00
+            mv half_01 original_file
+            echo "SECOND=no" >> $GITHUB_OUTPUT
+            split -d -b 90M original_file part_
+            rm original_file
+            cd ..
+            echo "SPLIT=yes" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 📤 ذخیره در مخزن
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "action@github.com"
+          git add downloads/
+          git commit -m "📦 اضافه کردن فایل" || echo "تغییری برای ذخیره وجود ندارد"
+          git push origin main
