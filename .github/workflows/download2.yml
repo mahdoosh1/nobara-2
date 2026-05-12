@@ -1,4 +1,4 @@
-name: download-nobara-part-2
+name: download-nobara
 
 on:
   workflow_dispatch:
@@ -8,6 +8,14 @@ on:
         required: true
         type: string
         default: 'https://nobara-images.nobaraproject.org/Nobara-43-Official-2026-04-19.iso'
+      upload_half:
+        description: '📤 کدام نیمه آپلود شود؟'
+        required: true
+        type: choice
+        options:
+          - 'first_half'
+          - 'second_half'
+        default: 'first_half'
 
 jobs:
   conditional-save:
@@ -29,6 +37,7 @@ jobs:
           SIZE=$(stat -c%s "downloads/original_file")
           SIZE_MB=$((SIZE / 1024 / 1024))
           echo "📊 حجم فایل: ${SIZE_MB} MB"
+          
           if [ $SIZE_MB -lt 90 ]; then
             echo "✅ فایل زیر ۹۰ مگ است، تقسیم نمی‌شود."
             mv "downloads/original_file" "downloads/$(basename "${{ github.event.inputs.file_url }}")"
@@ -36,21 +45,62 @@ jobs:
           else
             echo "✂️ فایل بالای ۹۰ مگ است، تقسیم می‌شود."
             cd downloads
+            
+            # Split into two halves
             split -d -n 2 original_file half_
-            rm original_file
-            rm half_00
-            mv half_01 original_file
-            echo "SECOND=no" >> $GITHUB_OUTPUT
-            split -d -b 90M original_file part_
-            rm original_file
+            
+            UPLOAD_HALF="${{ github.event.inputs.upload_half }}"
+            
+            if [ "$UPLOAD_HALF" = "first_half" ]; then
+              echo "🎯 آپلود نیمه اول..."
+              mv half_00 selected_half
+              rm half_01
+              echo "HALF=first" >> $GITHUB_OUTPUT
+            else
+              echo "🎯 آپلود نیمه دوم..."
+              mv half_01 selected_half
+              rm half_00
+              echo "HALF=second" >> $GITHUB_OUTPUT
+            fi
+            
+            rm -f original_file
+            
+            # Split the selected half into 90MB parts
+            split -d -b 90M selected_half part_
+            rm selected_half
+            
+            # Rename parts properly
+            for file in part_*; do
+              if [ "$UPLOAD_HALF" = "first_half" ]; then
+                mv "$file" "first_half_${file}"
+              else
+                mv "$file" "second_half_${file}"
+              fi
+            done
+            
             cd ..
             echo "SPLIT=yes" >> $GITHUB_OUTPUT
           fi
 
-      - name: 📤 ذخیره در مخزن
+      - name: 📤 کامیت و آپلود قطعات
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "action@github.com"
-          git add downloads/
-          git commit -m "📦 اضافه کردن فایل" || echo "تغییری برای ذخیره وجود ندارد"
-          git push origin main
+          
+          if [ "${{ steps.check.outputs.SPLIT }}" = "yes" ]; then
+            # Commit each part separately
+            cd downloads
+            PART_NUMBER=1
+            for file in $(ls -1 part_* first_half_part_* second_half_part_* 2>/dev/null | sort); do
+              git add "$file"
+              git commit -m "📦 آپلود قطعه ${PART_NUMBER} از نیمه ${{ github.event.inputs.upload_half }}"
+              git push origin main
+              PART_NUMBER=$((PART_NUMBER + 1))
+            done
+            cd ..
+          else
+            # Single commit for small file
+            git add downloads/
+            git commit -m "📦 اضافه کردن فایل کامل (زیر ۹۰ مگابایت)"
+            git push origin main
+          fi
